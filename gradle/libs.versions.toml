@@ -12,6 +12,7 @@ room = "2.7.1"
 ksp = "2.2.0-2.0.2"
 retrofit = "2.9.0"
 okhttp = "4.12.0"
+playServicesLocation = "21.3.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -38,6 +39,7 @@ retrofit-gson = { group = "com.squareup.retrofit2", name = "converter-gson", ver
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
 
 maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version = "0.12.1" }
+play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 
 
 [plugins]
