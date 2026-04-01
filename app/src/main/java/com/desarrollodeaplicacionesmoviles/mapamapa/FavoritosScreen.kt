@@ -54,7 +54,7 @@ fun FavoritosScreen(onBack: () -> Unit) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(punto.nombre, style = MaterialTheme.typography.titleMedium)
                                 Text(punto.descripcion, style = MaterialTheme.typography.bodySmall)
-                                Text("📍 ${punto.latitud}, ${punto.longitud}",
+                                Text("${punto.latitud}, ${punto.longitud}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline)
                                 Text("● ${punto.tipo_nombre}",

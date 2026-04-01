@@ -18,28 +18,46 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.compose.*
+import kotlinx.serialization.json.JsonObject
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.rememberCameraState
+import org.maplibre.compose.expressions.dsl.const
+import org.maplibre.compose.layers.CircleLayer
 import org.maplibre.compose.location.LocationPuck
 import org.maplibre.compose.location.rememberDefaultLocationProvider
 import org.maplibre.compose.location.rememberUserLocationState
 import org.maplibre.compose.map.MaplibreMap
+import org.maplibre.compose.sources.GeoJsonData
+import org.maplibre.compose.sources.rememberGeoJsonSource
 import org.maplibre.compose.style.BaseStyle
+import org.maplibre.spatialk.geojson.Feature
+import org.maplibre.spatialk.geojson.FeatureCollection
+import org.maplibre.spatialk.geojson.Point
+import org.maplibre.spatialk.geojson.Position
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
+        windowInsetsController.hide(WindowInsetsCompat.Type.statusBars())
+        windowInsetsController.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         setContent {
             val navController = rememberNavController()
             NavHost(navController = navController, startDestination = "mapa") {
                 composable("mapa") {
-                    MapaScreen(
-                        onVerPuntos = { navController.navigate("puntos") },
-                        onVerBarrios = { navController.navigate("barrios") },
-                        onVerFavoritos = { navController.navigate("favoritos") }
-                    )
+                    Column(modifier = Modifier.padding(bottom = 0.dp, top = 0.dp)) {
+                        MapaScreen(
+                            onVerPuntos = { navController.navigate("puntos") },
+                            onVerBarrios = { navController.navigate("barrios") },
+                            onVerFavoritos = { navController.navigate("favoritos") }
+                        )
+                    }
                 }
                 composable("puntos") {
                     PuntosScreen(onBack = { navController.popBackStack() })
@@ -61,25 +79,33 @@ fun MapaScreen(
 ) {
     val context = LocalContext.current
 
-    // Proper location setup
+    var puntos by remember { mutableStateOf<List<Punto>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        try {
+            puntos = RetrofitClient.api.listarPuntos()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     val locationProvider = rememberDefaultLocationProvider()
     val locationState = rememberUserLocationState(locationProvider)
 
     val cameraState = rememberCameraState(
         firstPosition = CameraPosition(
-            target = org.maplibre.spatialk.geojson.Position(-68.1193, -16.5000),
-            zoom = 13.0
+            target = Position(
+                locationState.location?.position?.longitude ?: -68.1193,
+                locationState.location?.position?.latitude ?: -16.5000
+            ),
+            zoom = 15.0
         )
     )
 
-    // Permission launcher
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        // Location provider will automatically start when permission is granted
-    }
+    ) { /* Location provider arranca automáticamente al conceder permiso */ }
 
-    // Check and request permission
     LaunchedEffect(Unit) {
         val hasPermission = ContextCompat.checkSelfPermission(
             context,
@@ -96,12 +122,13 @@ fun MapaScreen(
             baseStyle = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
             cameraState = cameraState
         ) {
-            // Use the built-in LocationPuck instead of manual CircleLayer
             LocationPuck(
                 idPrefix = "user-location",
                 locationState = locationState,
                 cameraState = cameraState
             )
+
+            CircleLayerPlacitas(puntos = puntos)
         }
 
         Box(
@@ -128,4 +155,37 @@ fun MapaScreen(
             }
         }
     }
+}
+
+@Composable
+private fun CircleLayerPlacitas(puntos: List<Punto>) {
+    if (puntos.isEmpty()) return
+
+    val dotSource = rememberGeoJsonSource(
+        data = GeoJsonData.Features(
+            FeatureCollection(
+                puntos.map { punto ->
+                    Feature(
+                        geometry = Point(
+                            Position(
+                                punto.latitud.toDouble(),   // ✅ latitud y longitud swapeadas (la API los tiene invertidos)
+                                punto.longitud.toDouble()
+                            )
+                        ),
+                        properties = JsonObject(emptyMap()) // ✅ tipo correcto para el serializer de spatialk
+                    )
+                }
+            )
+        )
+    )
+
+    CircleLayer(
+        id = "circle-layer-placitas",
+        source = dotSource,
+        color = const(Color.Blue),
+        radius = const(10.dp),
+        strokeColor = const(Color.White),
+        strokeWidth = const(2.dp),
+        minZoom = 10f
+    )
 }

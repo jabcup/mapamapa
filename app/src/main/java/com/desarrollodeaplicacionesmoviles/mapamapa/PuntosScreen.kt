@@ -26,6 +26,7 @@ fun PuntosScreen(onBack: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     val db = remember { AppDatabase.getInstance(context) }
 
+    // launch effect ejecuta algo al cargar la pantalla
     LaunchedEffect(Unit) {
         try {
             puntos = RetrofitClient.api.listarPuntos()
@@ -80,7 +81,7 @@ fun PuntoItem(punto: Punto, dao: FavoritosDao, scope: kotlinx.coroutines.Corouti
             Column(modifier = Modifier.weight(1f)) {
                 Text(punto.nombre, style = MaterialTheme.typography.titleMedium)
                 Text(punto.descripcion, style = MaterialTheme.typography.bodySmall)
-                Text("📍 ${punto.latitud}, ${punto.longitud}",
+                Text("${punto.latitud}, ${punto.longitud}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline)
                 punto.tipo.let {
