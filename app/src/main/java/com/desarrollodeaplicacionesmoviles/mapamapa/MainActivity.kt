@@ -3,6 +3,7 @@ package com.desarrollodeaplicacionesmoviles.mapamapa
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -31,6 +32,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.compose.*
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import org.maplibre.android.geometry.LatLng
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.rememberCameraState
 import org.maplibre.compose.expressions.dsl.const
@@ -104,7 +106,6 @@ fun MapaScreen(
 
     val locationProvider = rememberDefaultLocationProvider()
     val locationState = rememberUserLocationState(locationProvider)
-
     val cameraState = rememberCameraState(
         firstPosition = CameraPosition(
             target = Position(
@@ -130,6 +131,8 @@ fun MapaScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        Toast.makeText(context, "ubicacion siendo ${locationState.location?.position?.longitude ?: 0.0} y ${locationState.location?.position?.longitude ?: 0.0}", Toast.LENGTH_SHORT).show()
+
         MaplibreMap(
             baseStyle = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
             cameraState = cameraState,
@@ -140,18 +143,29 @@ fun MapaScreen(
             }
         ) {
             // Only show LocationPuck if location data is valid
-            locationState.location?.let { location ->
-                val isValidLocation = location.accuracy != NaN &&
-                        location.bearing != NaN &&
-                        location.bearingAccuracy != NaN
+          //  val cameraState = rememberCameraState()
 
-                if (isValidLocation) {
-                    LocationPuck(
-                        idPrefix = "user-location",
-                        locationState = locationState,
-                        cameraState = cameraState
+            locationState.location?.let { location ->
+
+                val coords = Position(
+                    latitude = location.position.latitude,
+                    longitude = location.position.longitude
+                )
+
+                LaunchedEffect(coords) {
+                    cameraState.animateTo(
+                        CameraPosition(
+                            target = coords,
+                            zoom = 15.0
+                        )
                     )
                 }
+
+                LocationPuck(
+                    idPrefix = "user-location",
+                    locationState = locationState,
+                    cameraState = cameraState
+                )
             }
 
             CircleLayerPlacitas(
