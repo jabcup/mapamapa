@@ -31,3 +31,7 @@ data class Punto(
     val tipo_id: Int,
     val tipo: Tipo
 )
+
+data class Polyline(
+    val polyline: String
+)

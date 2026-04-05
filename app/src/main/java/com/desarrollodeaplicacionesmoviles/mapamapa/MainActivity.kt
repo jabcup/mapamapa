@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.compose.*
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.maplibre.android.geometry.LatLng
@@ -131,7 +133,8 @@ fun MapaScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Toast.makeText(context, "ubicacion siendo ${locationState.location?.position?.longitude ?: 0.0} y ${locationState.location?.position?.longitude ?: 0.0}", Toast.LENGTH_SHORT).show()
+        //
+        // Toast.makeText(context, "ubicacion siendo ${locationState.location?.position?.longitude ?: 0.0} y ${locationState.location?.position?.longitude ?: 0.0}", Toast.LENGTH_SHORT).show()
 
         MaplibreMap(
             baseStyle = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
@@ -220,6 +223,46 @@ private fun PuntoInfoCard(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    //obtengo la ubicación desde acá? otra ve?
+    val locationProvider = rememberDefaultLocationProvider()
+    val locationState = rememberUserLocationState(locationProvider)
+
+    // Estado para guardar la polyline obtenida
+    var polyline by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    val coroutineScope = rememberCoroutineScope()
+
+    suspend fun getPolyline(lat: String, long: String):String?{
+        if (isLoading) return "aaa"
+
+
+            isLoading = true
+            errorMsg = null
+            try {
+                val polyline = RetrofitClient.api.obtenerPolylineSimple(
+                    locationState.location?.position?.latitude.toString(),
+                    locationState.location?.position?.longitude.toString(),
+                    lat,
+                    long)
+                println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                println("polyline es: ${polyline}")
+                return polyline
+            }
+            catch (e: Exception){
+                errorMsg = e.message ?: "Error desconocido"
+                //return errorMsg
+            }
+            finally {
+                isLoading = false
+            }
+
+
+        return polyline
+    }
+
+
     val colorTipo = try {
         Color(punto.tipo.color.toColorInt())
     } catch (e: Exception) {
@@ -254,8 +297,27 @@ private fun PuntoInfoCard(
                         fontWeight = FontWeight.SemiBold
                     )
                 }
-                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val context = LocalContext.current
+
+                    Button(onClick = {
+
+                        //Toast.makeText(context, "calcule la ruta hastas ${punto.nombre}", Toast.LENGTH_SHORT).show()
+                        coroutineScope.launch {
+                            val ruta = getPolyline(punto.longitud, punto.latitud)
+                            Toast.makeText(context, "polyline ser: ${ruta}", Toast.LENGTH_SHORT).show()
+                        }
+
+                    }) { Text("Ruta") }
+                    Button(onClick = {
+                        Toast.makeText(context, "agregao a favoritos el ${punto.nombre}", Toast.LENGTH_SHORT).show() }) { Text("Favoritar") }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
+                    }
                 }
             }
 
