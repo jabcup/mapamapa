@@ -94,14 +94,26 @@ fun MapaScreen(
     onVerFavoritos: () -> Unit
 ) {
     val context = LocalContext.current
+    val db = remember { AppDatabase.getInstance(context) }
+    val coroutineScope = rememberCoroutineScope()
 
     var puntos by remember { mutableStateOf<List<Punto>>(emptyList()) }
+    var puntosPersonales by remember { mutableStateOf<List<PuntoPersonal>>(emptyList()) }
     var puntoSeleccionado by remember { mutableStateOf<Punto?>(null) }
     var ruta by remember { mutableStateOf<String?>(null) }
+    var puntoPersonalSeleccionado by remember { mutableStateOf<Position?>(null) }
 
     LaunchedEffect(Unit) {
         try {
             puntos = RetrofitClient.api.listarPuntos()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        try {
+            puntosPersonales = db.puntosPersonalesDao().getAll()
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -138,8 +150,12 @@ fun MapaScreen(
         MaplibreMap(
             baseStyle = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
             cameraState = cameraState,
-            onMapClick = { _, _ ->
-                puntoSeleccionado = null
+            onMapClick = { position, _ ->
+                if (puntoSeleccionado == null) {
+                    puntoPersonalSeleccionado = position
+                } else {
+                    puntoSeleccionado = null
+                }
                 ClickResult.Pass
             }
         ) {
@@ -163,11 +179,20 @@ fun MapaScreen(
             CircleLayerPlacitas(
                 puntos = puntos,
                 onPuntoClick = { punto ->
+                    puntoPersonalSeleccionado = null
                     puntoSeleccionado = punto
                 }
             )
 
-            // LineLayer de la ruta
+            CircleLayerPersonales(
+                puntosPersonales = puntosPersonales,
+                onPuntoClick = { _ ->
+                    // por ahora solo cierra cualquier card abierta
+                    puntoSeleccionado = null
+                    puntoPersonalSeleccionado = null
+                }
+            )
+
             ruta?.let { encodedPolyline ->
                 val posiciones = remember(encodedPolyline) {
                     decodificarPolyline(encodedPolyline)
@@ -179,7 +204,6 @@ fun MapaScreen(
                                 listOf(
                                     Feature(
                                         geometry = LineString(posiciones),
-
                                         properties = JsonObject(emptyMap())
                                     )
                                 )
@@ -205,6 +229,59 @@ fun MapaScreen(
                 },
                 onRutaCalculada = { polylineString ->
                     ruta = polylineString
+                },
+                onFavoritar = {
+                    coroutineScope.launch {
+                        db.favoritosDao().insert(
+                            PuntoFavorito(
+                                id = punto.id,
+                                nombre = punto.nombre,
+                                descripcion = punto.descripcion,
+                                latitud = punto.latitud,
+                                longitud = punto.longitud,
+                                tipo_nombre = punto.tipo.nombre,
+                                tipo_color = punto.tipo.color
+                            )
+                        )
+                        Toast.makeText(context, "${punto.nombre} agregado a favoritos", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 16.dp, start = 16.dp, end = 16.dp)
+            )
+        }
+
+        puntoPersonalSeleccionado?.let { posicion ->
+            PuntoPersonalCard(
+                posicion = posicion,
+                onDismiss = { puntoPersonalSeleccionado = null },
+                onGuardar = { nombre, descripcion, isHome ->
+                    coroutineScope.launch {
+                        if (isHome) {
+                            db.puntosPersonalesDao().setAsHome(
+                                PuntoPersonal(
+                                    nombre = nombre,
+                                    descripcion = descripcion,
+                                    latitud = posicion.latitude.toString(),
+                                    longitud = posicion.longitude.toString(),
+                                    isHome = true
+                                )
+                            )
+                        } else {
+                            db.puntosPersonalesDao().insert(
+                                PuntoPersonal(
+                                    nombre = nombre,
+                                    descripcion = descripcion,
+                                    latitud = posicion.latitude.toString(),
+                                    longitud = posicion.longitude.toString()
+                                )
+                            )
+                        }
+                        puntosPersonales = db.puntosPersonalesDao().getAll()
+                        Toast.makeText(context, "$nombre guardado", Toast.LENGTH_SHORT).show()
+                        puntoPersonalSeleccionado = null
+                    }
                 },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -239,10 +316,94 @@ fun MapaScreen(
 }
 
 @Composable
+private fun PuntoPersonalCard(
+    posicion: Position,
+    onDismiss: () -> Unit,
+    onGuardar: (nombre: String, descripcion: String, isHome: Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var nombre by remember { mutableStateOf("") }
+    var descripcion by remember { mutableStateOf("") }
+    var isHome by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Nuevo punto personal",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Black
+                )
+                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = nombre,
+                onValueChange = { nombre = it },
+                label = { Text("Nombre") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = descripcion,
+                onValueChange = { descripcion = it },
+                label = { Text("Descripción") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Checkbox(
+                    checked = isHome,
+                    onCheckedChange = { isHome = it }
+                )
+                Text(text = "Marcar como hogar", fontSize = 14.sp, color = Color.DarkGray)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = {
+                    if (nombre.isNotBlank()) {
+                        onGuardar(nombre, descripcion, isHome)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Guardar")
+            }
+        }
+    }
+}
+
+@Composable
 private fun PuntoInfoCard(
     punto: Punto,
     onDismiss: () -> Unit,
     onRutaCalculada: (String) -> Unit,
+    onFavoritar: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val locationProvider = rememberDefaultLocationProvider()
@@ -261,9 +422,7 @@ private fun PuntoInfoCard(
         try {
             val userLat = locationState.location?.position?.latitude.toString()
             val userLng = locationState.location?.position?.longitude.toString()
-            Toast.makeText(context, "Enviando: userLat=$userLat userLng=$userLng destLat=$lat destLng=$long", Toast.LENGTH_LONG).show()
             val resultado = RetrofitClient.api.obtenerPolylineSimple(userLat, userLng, lat, long)
-            Toast.makeText(context, "Polyline recibida: $resultado", Toast.LENGTH_LONG).show()
             return resultado
         } catch (e: Exception) {
             errorMsg = e.message ?: "Error desconocido"
@@ -319,14 +478,12 @@ private fun PuntoInfoCard(
                             if (polylineString != null) {
                                 onRutaCalculada(polylineString)
                             } else {
-                                Toast.makeText(context, "La polyline fue null, no se dibuja", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "No se pudo obtener la ruta", Toast.LENGTH_SHORT).show()
                             }
                         }
                     }) { Text("Ruta") }
 
-                    Button(onClick = {
-                        Toast.makeText(context, "agregao a favoritos el ${punto.nombre}", Toast.LENGTH_SHORT).show()
-                    }) { Text("Favoritar") }
+                    Button(onClick = onFavoritar) { Text("Favoritar") }
 
                     IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
@@ -388,6 +545,58 @@ private fun CircleLayerPlacitas(
                 ?.toIntOrNull()
             if (clickedId != null) {
                 puntos.find { it.id == clickedId }?.let { onPuntoClick(it) }
+            }
+            ClickResult.Consume
+        }
+    )
+}
+
+@Composable
+private fun CircleLayerPersonales(
+    puntosPersonales: List<PuntoPersonal>,
+    onPuntoClick: (PuntoPersonal) -> Unit
+) {
+    if (puntosPersonales.isEmpty()) return
+
+    val dotSource = rememberGeoJsonSource(
+        data = GeoJsonData.Features(
+            FeatureCollection(
+                puntosPersonales.map { punto ->
+                    Feature(
+                        geometry = Point(
+                            Position(
+                                punto.longitud.toDouble(),
+                                punto.latitud.toDouble()
+                            )
+                        ),
+                        properties = JsonObject(
+                            mapOf(
+                                "id" to JsonPrimitive(punto.id),
+                                "isHome" to JsonPrimitive(punto.isHome)
+                            )
+                        )
+                    )
+                }
+            )
+        )
+    )
+
+    CircleLayer(
+        id = "circle-layer-personales",
+        source = dotSource,
+        color = const(Color(0xFF424242)),
+        radius = const(7.dp),
+        strokeColor = const(Color.White),
+        strokeWidth = const(2.dp),
+        minZoom = 10f,
+        onClick = { features ->
+            val clickedId = features.firstOrNull()
+                ?.properties
+                ?.get("id")
+                ?.toString()
+                ?.toIntOrNull()
+            if (clickedId != null) {
+                puntosPersonales.find { it.id == clickedId }?.let { onPuntoClick(it) }
             }
             ClickResult.Consume
         }
