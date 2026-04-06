@@ -34,13 +34,13 @@ import androidx.navigation.compose.*
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import org.maplibre.android.geometry.LatLng
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.rememberCameraState
 import org.maplibre.compose.expressions.dsl.const
 import org.maplibre.compose.expressions.dsl.feature
 import org.maplibre.compose.expressions.dsl.convertToColor
 import org.maplibre.compose.layers.CircleLayer
+import org.maplibre.compose.layers.LineLayer
 import org.maplibre.compose.location.LocationPuck
 import org.maplibre.compose.location.rememberDefaultLocationProvider
 import org.maplibre.compose.location.rememberUserLocationState
@@ -51,9 +51,9 @@ import org.maplibre.compose.style.BaseStyle
 import org.maplibre.compose.util.ClickResult
 import org.maplibre.spatialk.geojson.Feature
 import org.maplibre.spatialk.geojson.FeatureCollection
+import org.maplibre.spatialk.geojson.LineString
 import org.maplibre.spatialk.geojson.Point
 import org.maplibre.spatialk.geojson.Position
-import kotlin.Double.Companion.NaN
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,6 +97,7 @@ fun MapaScreen(
 
     var puntos by remember { mutableStateOf<List<Punto>>(emptyList()) }
     var puntoSeleccionado by remember { mutableStateOf<Punto?>(null) }
+    var ruta by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         try {
@@ -133,37 +134,25 @@ fun MapaScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        //
-        // Toast.makeText(context, "ubicacion siendo ${locationState.location?.position?.longitude ?: 0.0} y ${locationState.location?.position?.longitude ?: 0.0}", Toast.LENGTH_SHORT).show()
 
         MaplibreMap(
             baseStyle = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
             cameraState = cameraState,
             onMapClick = { _, _ ->
-                // Toque en área vacía: cierra la card
                 puntoSeleccionado = null
                 ClickResult.Pass
             }
         ) {
-            // Only show LocationPuck if location data is valid
-          //  val cameraState = rememberCameraState()
-
             locationState.location?.let { location ->
-
                 val coords = Position(
                     latitude = location.position.latitude,
                     longitude = location.position.longitude
                 )
-
                 LaunchedEffect(coords) {
                     cameraState.animateTo(
-                        CameraPosition(
-                            target = coords,
-                            zoom = 15.0
-                        )
+                        CameraPosition(target = coords, zoom = 15.0)
                     )
                 }
-
                 LocationPuck(
                     idPrefix = "user-location",
                     locationState = locationState,
@@ -177,20 +166,52 @@ fun MapaScreen(
                     puntoSeleccionado = punto
                 }
             )
+
+            // LineLayer de la ruta
+            ruta?.let { encodedPolyline ->
+                val posiciones = remember(encodedPolyline) {
+                    decodificarPolyline(encodedPolyline)
+                }
+                if (posiciones.size >= 2) {
+                    val rutaSource = rememberGeoJsonSource(
+                        data = GeoJsonData.Features(
+                            FeatureCollection(
+                                listOf(
+                                    Feature(
+                                        geometry = LineString(posiciones),
+
+                                        properties = JsonObject(emptyMap())
+                                    )
+                                )
+                            )
+                        )
+                    )
+                    LineLayer(
+                        id = "ruta-layer",
+                        source = rutaSource,
+                        color = const(Color(0xFF1976D2)),
+                        width = const(5.dp)
+                    )
+                }
+            }
         }
 
-        // Card flotante del punto seleccionado
         puntoSeleccionado?.let { punto ->
             PuntoInfoCard(
                 punto = punto,
-                onDismiss = { puntoSeleccionado = null },
+                onDismiss = {
+                    puntoSeleccionado = null
+                    ruta = null
+                },
+                onRutaCalculada = { polylineString ->
+                    ruta = polylineString
+                },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 16.dp, start = 16.dp, end = 16.dp)
             )
         }
 
-        // Botón radial
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -221,47 +242,37 @@ fun MapaScreen(
 private fun PuntoInfoCard(
     punto: Punto,
     onDismiss: () -> Unit,
+    onRutaCalculada: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    //obtengo la ubicación desde acá? otra ve?
     val locationProvider = rememberDefaultLocationProvider()
     val locationState = rememberUserLocationState(locationProvider)
 
-    // Estado para guardar la polyline obtenida
-    var polyline by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
-    suspend fun getPolyline(lat: String, long: String):String?{
-        if (isLoading) return "aaa"
-
-
-            isLoading = true
-            errorMsg = null
-            try {
-                val polyline = RetrofitClient.api.obtenerPolylineSimple(
-                    locationState.location?.position?.latitude.toString(),
-                    locationState.location?.position?.longitude.toString(),
-                    lat,
-                    long)
-                println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                println("polyline es: ${polyline}")
-                return polyline
-            }
-            catch (e: Exception){
-                errorMsg = e.message ?: "Error desconocido"
-                //return errorMsg
-            }
-            finally {
-                isLoading = false
-            }
-
-
-        return polyline
+    suspend fun getPolyline(lat: String, long: String): String? {
+        if (isLoading) return null
+        isLoading = true
+        errorMsg = null
+        try {
+            val userLat = locationState.location?.position?.latitude.toString()
+            val userLng = locationState.location?.position?.longitude.toString()
+            Toast.makeText(context, "Enviando: userLat=$userLat userLng=$userLng destLat=$lat destLng=$long", Toast.LENGTH_LONG).show()
+            val resultado = RetrofitClient.api.obtenerPolylineSimple(userLat, userLng, lat, long)
+            Toast.makeText(context, "Polyline recibida: $resultado", Toast.LENGTH_LONG).show()
+            return resultado
+        } catch (e: Exception) {
+            errorMsg = e.message ?: "Error desconocido"
+            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+        } finally {
+            isLoading = false
+        }
+        return null
     }
-
 
     val colorTipo = try {
         Color(punto.tipo.color.toColorInt())
@@ -302,19 +313,21 @@ private fun PuntoInfoCard(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val context = LocalContext.current
-
                     Button(onClick = {
-
-                        //Toast.makeText(context, "calcule la ruta hastas ${punto.nombre}", Toast.LENGTH_SHORT).show()
                         coroutineScope.launch {
-                            val ruta = getPolyline(punto.longitud, punto.latitud)
-                            Toast.makeText(context, "polyline ser: ${ruta}", Toast.LENGTH_SHORT).show()
+                            val polylineString = getPolyline(punto.longitud, punto.latitud)
+                            if (polylineString != null) {
+                                onRutaCalculada(polylineString)
+                            } else {
+                                Toast.makeText(context, "La polyline fue null, no se dibuja", Toast.LENGTH_SHORT).show()
+                            }
                         }
-
                     }) { Text("Ruta") }
+
                     Button(onClick = {
-                        Toast.makeText(context, "agregao a favoritos el ${punto.nombre}", Toast.LENGTH_SHORT).show() }) { Text("Favoritar") }
+                        Toast.makeText(context, "agregao a favoritos el ${punto.nombre}", Toast.LENGTH_SHORT).show()
+                    }) { Text("Favoritar") }
+
                     IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
                     }
@@ -322,21 +335,9 @@ private fun PuntoInfoCard(
             }
 
             Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = punto.nombre,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black
-            )
-
+            Text(text = punto.nombre, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
             Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = punto.descripcion,
-                fontSize = 14.sp,
-                color = Color.DarkGray
-            )
+            Text(text = punto.descripcion, fontSize = 14.sp, color = Color.DarkGray)
         }
     }
 }
@@ -362,7 +363,7 @@ private fun CircleLayerPlacitas(
                         properties = JsonObject(
                             mapOf(
                                 "color" to JsonPrimitive(punto.tipo.color),
-                                "id"    to JsonPrimitive(punto.id)
+                                "id" to JsonPrimitive(punto.id)
                             )
                         )
                     )
@@ -374,7 +375,6 @@ private fun CircleLayerPlacitas(
     CircleLayer(
         id = "circle-layer-placitas",
         source = dotSource,
-        // Fixed: use convertToColor() instead of asColor()
         color = feature["color"].convertToColor(),
         radius = const(10.dp),
         strokeColor = const(Color.White),
@@ -386,7 +386,6 @@ private fun CircleLayerPlacitas(
                 ?.get("id")
                 ?.toString()
                 ?.toIntOrNull()
-
             if (clickedId != null) {
                 puntos.find { it.id == clickedId }?.let { onPuntoClick(it) }
             }
