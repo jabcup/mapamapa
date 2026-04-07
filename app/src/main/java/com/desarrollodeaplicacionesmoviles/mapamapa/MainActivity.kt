@@ -9,7 +9,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
@@ -20,6 +23,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +61,66 @@ import org.maplibre.spatialk.geojson.LineString
 import org.maplibre.spatialk.geojson.Point
 import org.maplibre.spatialk.geojson.Position
 
+// ─── Sistema de diseño ────────────────────────────────────────────────────────
+// Paleta monocromática con un único acento funcional por rol semántico
+private val ColorSurface        = Color(0xF5FFFFFF)   // card background
+private val ColorSurfaceDark    = Color(0xFF111111)   // inversión para modo oscuro puntual
+private val ColorBorder         = Color(0xFFE0E0E0)   // borde sutil
+private val ColorBorderStrong   = Color(0xFF1A1A1A)   // borde de énfasis
+private val ColorTextPrimary    = Color(0xFF0D0D0D)
+private val ColorTextSecondary  = Color(0xFF757575)
+private val ColorTextTertiary   = Color(0xFFB0B0B0)
+private val ColorDestructive    = Color(0xFFD32F2F)
+private val ColorRoute          = Color(0xFF1565C0)   // único color de acento: rutas
+private val ColorRouteAlt       = Color(0xFFBF360C)   // rutas guardadas
+
+private val COLOR_PUNTO_PERSONAL = "#1A1A1A"
+private val COLOR_PUNTO_HOME     = "#0D47A1"
+
+// ─── Modificadores reutilizables ──────────────────────────────────────────────
+private fun Modifier.card(): Modifier = this
+    .shadow(elevation = 8.dp, shape = RoundedCornerShape(20.dp), ambientColor = Color(0x14000000))
+    .background(ColorSurface, RoundedCornerShape(20.dp))
+    .clip(RoundedCornerShape(20.dp))
+
+private fun Modifier.cardWithBorder(): Modifier = this
+    .card()
+    .border(1.dp, ColorBorder, RoundedCornerShape(20.dp))
+
+// ─── Divider minimalista ──────────────────────────────────────────────────────
+@Composable
+private fun ThinDivider(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(ColorBorder)
+    )
+}
+
+// ─── Chip de etiqueta ─────────────────────────────────────────────────────────
+@Composable
+private fun TypeChip(label: String, dotColor: Color) {
+    Row(
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .background(dotColor, CircleShape)
+        )
+        Text(
+            text          = label.uppercase(),
+            fontSize      = 10.sp,
+            fontWeight    = FontWeight.Bold,
+            color         = ColorTextTertiary,
+            letterSpacing = 1.2.sp
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,13 +133,11 @@ class MainActivity : ComponentActivity() {
             val navController = rememberNavController()
             NavHost(navController = navController, startDestination = "mapa") {
                 composable("mapa") {
-                    Column(modifier = Modifier.padding(bottom = 0.dp, top = 0.dp)) {
-                        MapaScreen(
-                            onVerPuntos    = { navController.navigate("puntos") },
-                            onVerBarrios   = { navController.navigate("barrios") },
-                            onVerFavoritos = { navController.navigate("favoritos") }
-                        )
-                    }
+                    MapaScreen(
+                        onVerPuntos    = { navController.navigate("puntos") },
+                        onVerBarrios   = { navController.navigate("barrios") },
+                        onVerFavoritos = { navController.navigate("favoritos") }
+                    )
                 }
                 composable("puntos") {
                     PuntosScreen(onBack = { navController.popBackStack() })
@@ -89,54 +153,45 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val COLOR_PUNTO_PERSONAL = "#424242"
-private val COLOR_PUNTO_HOME     = "#E65100"
-
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun MapaScreen(
-    onVerPuntos: () -> Unit,
-    onVerBarrios: () -> Unit,
+    onVerPuntos:    () -> Unit,
+    onVerBarrios:   () -> Unit,
     onVerFavoritos: () -> Unit
 ) {
-    val context = LocalContext.current
-    val db = remember { AppDatabase.getInstance(context) }
+    val context        = LocalContext.current
+    val db             = remember { AppDatabase.getInstance(context) }
     val coroutineScope = rememberCoroutineScope()
 
-    // ── Permiso: se verifica antes de llamar a rememberDefaultLocationProvider ──
     var permisoOtorgado by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
+                context, Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
-
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        permisoOtorgado = granted
-    }
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> permisoOtorgado = granted }
 
     LaunchedEffect(Unit) {
-        if (!permisoOtorgado) {
-            launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+        if (!permisoOtorgado) launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
     }
 
-    var modoOffline by remember { mutableStateOf(false) }
-    var puntos by remember { mutableStateOf<List<Punto>>(emptyList()) }
-    var puntosPersonales by remember { mutableStateOf<List<PuntoPersonal>>(emptyList()) }
-    var puntoSeleccionado by remember { mutableStateOf<Punto?>(null) }
+    var modoOffline               by remember { mutableStateOf(false) }
+    var puntos                    by remember { mutableStateOf<List<Punto>>(emptyList()) }
+    var puntosPersonales          by remember { mutableStateOf<List<PuntoPersonal>>(emptyList()) }
+    var puntoSeleccionado         by remember { mutableStateOf<Punto?>(null) }
     var puntoPersonalSeleccionado by remember { mutableStateOf<PuntoPersonal?>(null) }
-    var puntoPersonalNuevo by remember { mutableStateOf<Position?>(null) }
-    var ruta by remember { mutableStateOf<String?>(null) }
-    var rutasGuardadas by remember { mutableStateOf<List<String>>(emptyList()) }
-    var mostrarRutasGuardadas by remember { mutableStateOf(false) }
+    var puntoPersonalNuevo        by remember { mutableStateOf<Position?>(null) }
+    var ruta                      by remember { mutableStateOf<String?>(null) }
+    var rutasGuardadas            by remember { mutableStateOf<List<String>>(emptyList()) }
+    var mostrarRutasGuardadas     by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         try {
-            puntos = RetrofitClient.api.listarPuntos()
+            puntos      = RetrofitClient.api.listarPuntos()
             modoOffline = false
         } catch (e: Exception) {
             e.printStackTrace()
@@ -154,21 +209,15 @@ fun MapaScreen(
                         tipo        = Tipo(id = 0, nombre = fav.tipo_nombre, color = fav.tipo_color)
                     )
                 }
-            } catch (dbEx: Exception) {
-                dbEx.printStackTrace()
-            }
+            } catch (dbEx: Exception) { dbEx.printStackTrace() }
         }
     }
 
     LaunchedEffect(Unit) {
-        try {
-            puntosPersonales = db.puntosPersonalesDao().getAll()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        try { puntosPersonales = db.puntosPersonalesDao().getAll() }
+        catch (e: Exception) { e.printStackTrace() }
     }
 
-    // ── Location: solo se inicializa si el permiso fue otorgado ─────────────
     val locationProvider = if (permisoOtorgado) rememberDefaultLocationProvider() else null
     val locationState    = if (locationProvider != null) rememberUserLocationState(locationProvider) else null
 
@@ -200,10 +249,9 @@ fun MapaScreen(
                 )
                 guardados++
             }
-            Toast.makeText(context, "$guardados puntos esenciales guardados como favoritos", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "$guardados puntos esenciales guardados", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            Toast.makeText(context, "Error: ${e.javaClass.simpleName} - ${e.message}", Toast.LENGTH_LONG).show()
-            e.printStackTrace()
+            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -223,10 +271,8 @@ fun MapaScreen(
         favoritos.forEach { favorito ->
             try {
                 val polyline = RetrofitClient.api.obtenerPolylineSimple(
-                    home.longitud,
-                    home.latitud,
-                    favorito.longitud,
-                    favorito.latitud
+                    home.longitud, home.latitud,
+                    favorito.longitud, favorito.latitud
                 )
                 if (polyline != null) {
                     db.rutaDao().insert(Ruta(polyline = polyline))
@@ -242,14 +288,14 @@ fun MapaScreen(
     suspend fun toggleRutasGuardadas() {
         if (mostrarRutasGuardadas) {
             mostrarRutasGuardadas = false
-            rutasGuardadas = emptyList()
+            rutasGuardadas        = emptyList()
         } else {
             val rutas = db.rutaDao().getAll()
             if (rutas.isEmpty()) {
                 Toast.makeText(context, "No hay rutas guardadas", Toast.LENGTH_SHORT).show()
                 return
             }
-            rutasGuardadas = rutas.map { it.polyline }
+            rutasGuardadas        = rutas.map { it.polyline }
             mostrarRutasGuardadas = true
             Toast.makeText(context, "${rutas.size} rutas cargadas", Toast.LENGTH_SHORT).show()
         }
@@ -257,6 +303,7 @@ fun MapaScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
 
+        // ── Mapa ─────────────────────────────────────────────────────────────
         MaplibreMap(
             baseStyle   = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
             cameraState = cameraState,
@@ -277,7 +324,6 @@ fun MapaScreen(
                         latitude  = location.position.latitude,
                         longitude = location.position.longitude
                     )
-                    // Solo centra la primera vez que se obtiene la ubicación
                     var centradoInicial by remember { mutableStateOf(false) }
                     LaunchedEffect(centradoInicial) {
                         if (!centradoInicial) {
@@ -317,21 +363,16 @@ fun MapaScreen(
                 if (posiciones.size >= 2) {
                     val rutaSource = rememberGeoJsonSource(
                         data = GeoJsonData.Features(
-                            FeatureCollection(
-                                listOf(
-                                    Feature(
-                                        geometry   = LineString(posiciones),
-                                        properties = JsonObject(emptyMap())
-                                    )
-                                )
-                            )
+                            FeatureCollection(listOf(
+                                Feature(geometry = LineString(posiciones), properties = JsonObject(emptyMap()))
+                            ))
                         )
                     )
                     LineLayer(
                         id     = "ruta-layer",
                         source = rutaSource,
-                        color  = const(Color(0xFF1976D2)),
-                        width  = const(5.dp)
+                        color  = const(ColorRoute),
+                        width  = const(4.dp)
                     )
                 }
             }
@@ -356,145 +397,181 @@ fun MapaScreen(
                     LineLayer(
                         id     = "rutas-guardadas-layer",
                         source = rutasSource,
-                        color  = const(Color(0xFFE65100)),
-                        width  = const(4.dp)
+                        color  = const(ColorRouteAlt),
+                        width  = const(3.dp)
                     )
                 }
             }
         }
 
-        if (modoOffline) {
-            Surface(
-                modifier       = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
-                shape          = RoundedCornerShape(20.dp),
-                color          = Color(0xFFB71C1C).copy(alpha = 0.9f),
-                tonalElevation = 4.dp
+        // ── Banner offline ───────────────────────────────────────────────────
+        AnimatedVisibility(
+            visible = modoOffline,
+            enter   = slideInVertically { -it } + fadeIn(),
+            exit    = slideOutVertically { -it } + fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .cardWithBorder()
+                    .background(ColorSurface, RoundedCornerShape(20.dp))
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    modifier              = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                    Text(text = "Sin conexión — mostrando favoritos guardados", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                }
+                Box(modifier = Modifier.size(7.dp).background(ColorDestructive, CircleShape))
+                Text(
+                    text       = "Sin conexión · mostrando favoritos",
+                    color      = ColorTextPrimary,
+                    fontSize   = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.1.sp
+                )
             }
         }
 
-        puntoSeleccionado?.let { punto ->
-            PuntoInfoCard(
-                punto           = punto,
-                modoOffline     = modoOffline,
-                locationState   = locationState,
-                onDismiss       = { puntoSeleccionado = null; ruta = null },
-                onRutaCalculada = { poly -> ruta = poly },
-                onFavoritar     = {
-                    coroutineScope.launch {
-                        db.favoritosDao().insert(
-                            PuntoFavorito(
-                                id          = punto.id,
-                                nombre      = punto.nombre,
-                                descripcion = punto.descripcion,
-                                latitud     = punto.latitud,
-                                longitud    = punto.longitud,
-                                tipo_nombre = punto.tipo.nombre,
-                                tipo_color  = punto.tipo.color
-                            )
-                        )
-                        Toast.makeText(context, "${punto.nombre} agregado a favoritos", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = if (modoOffline) 52.dp else 16.dp, start = 16.dp, end = 16.dp)
-            )
-        }
+        val topPadding = if (modoOffline) 60.dp else 16.dp
 
-        puntoPersonalSeleccionado?.let { personal ->
-            PuntoPersonalInfoCard(
-                puntoPersonal = personal,
-                onDismiss     = { puntoPersonalSeleccionado = null },
-                onEliminar    = {
-                    coroutineScope.launch {
-                        db.puntosPersonalesDao().delete(personal)
-                        puntosPersonales = db.puntosPersonalesDao().getAll()
-                        puntoPersonalSeleccionado = null
-                        Toast.makeText(context, "${personal.nombre} eliminado", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = if (modoOffline) 52.dp else 16.dp, start = 16.dp, end = 16.dp)
-            )
-        }
-
-        puntoPersonalNuevo?.let { posicion ->
-            PuntoPersonalCard(
-                posicion  = posicion,
-                onDismiss = { puntoPersonalNuevo = null },
-                onGuardar = { nombre, descripcion, isHome ->
-                    coroutineScope.launch {
-                        if (isHome) {
-                            db.puntosPersonalesDao().setAsHome(
-                                PuntoPersonal(
-                                    nombre      = nombre,
-                                    descripcion = descripcion,
-                                    latitud     = posicion.longitude.toString(),
-                                    longitud    = posicion.latitude.toString(),
-                                    isHome      = true
-                                )
-                            )
-                        } else {
-                            db.puntosPersonalesDao().insert(
-                                PuntoPersonal(
-                                    nombre      = nombre,
-                                    descripcion = descripcion,
-                                    latitud     = posicion.longitude.toString(),
-                                    longitud    = posicion.latitude.toString()
-                                )
-                            )
-                        }
-                        puntosPersonales = db.puntosPersonalesDao().getAll()
-                        Toast.makeText(context, "$nombre guardado", Toast.LENGTH_SHORT).show()
-                        puntoPersonalNuevo = null
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = if (modoOffline) 52.dp else 16.dp, start = 16.dp, end = 16.dp)
-            )
-        }
-
-        Box(
-            modifier         = Modifier.fillMaxSize().padding(4.dp),
-            contentAlignment = Alignment.BottomEnd
+        // ── Card punto remoto ────────────────────────────────────────────────
+        AnimatedVisibility(
+            visible  = puntoSeleccionado != null,
+            enter    = slideInVertically { -it / 2 } + fadeIn(tween(200)),
+            exit     = slideOutVertically { -it / 2 } + fadeOut(tween(150)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = topPadding, start = 14.dp, end = 14.dp)
         ) {
-            Box(modifier = Modifier.offset(x = 8.dp, y = 18.dp)) {
-                RadialMenuButton(
-                    items = listOf(
-                        RadialMenuItem(0, Icons.Default.LocationOn, "Puntos",     Color.Cyan),
-                        RadialMenuItem(1, Icons.Default.Call,       "Personales",    Color.Green),
-                        RadialMenuItem(2, Icons.Default.Star,       "Favoritos",  Color.Yellow),
-                        RadialMenuItem(3, Icons.Default.Clear,      "Rutas",      Color.Magenta),
-                        RadialMenuItem(4, Icons.Default.Refresh,    "Cargar fav", Color.White),
-                        RadialMenuItem(5, Icons.Default.List,       "Ver rutas",  if (mostrarRutasGuardadas) Color.Red else Color.LightGray)
-                    ),
-                    onItemSelected = { item ->
-                        when (item.id) {
-                            0 -> onVerPuntos()
-                            1 -> onVerBarrios()
-                            2 -> onVerFavoritos()
-                            3 -> coroutineScope.launch { calcularYGuardarRutas() }
-                            4 -> coroutineScope.launch { cargarPuntosEsencialesComoFavoritos() }
-                            5 -> coroutineScope.launch { toggleRutasGuardadas() }
+            puntoSeleccionado?.let { punto ->
+                PuntoInfoCard(
+                    punto           = punto,
+                    modoOffline     = modoOffline,
+                    locationState   = locationState,
+                    onDismiss       = { puntoSeleccionado = null; ruta = null },
+                    onRutaCalculada = { poly -> ruta = poly },
+                    onFavoritar     = {
+                        coroutineScope.launch {
+                            db.favoritosDao().insert(
+                                PuntoFavorito(
+                                    id          = punto.id,
+                                    nombre      = punto.nombre,
+                                    descripcion = punto.descripcion,
+                                    latitud     = punto.latitud,
+                                    longitud    = punto.longitud,
+                                    tipo_nombre = punto.tipo.nombre,
+                                    tipo_color  = punto.tipo.color
+                                )
+                            )
+                            Toast.makeText(context, "${punto.nombre} en favoritos", Toast.LENGTH_SHORT).show()
                         }
                     }
                 )
             }
         }
+
+        // ── Card punto personal existente ────────────────────────────────────
+        AnimatedVisibility(
+            visible  = puntoPersonalSeleccionado != null,
+            enter    = slideInVertically { -it / 2 } + fadeIn(tween(200)),
+            exit     = slideOutVertically { -it / 2 } + fadeOut(tween(150)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = topPadding, start = 14.dp, end = 14.dp)
+        ) {
+            puntoPersonalSeleccionado?.let { personal ->
+                PuntoPersonalInfoCard(
+                    puntoPersonal = personal,
+                    onDismiss     = { puntoPersonalSeleccionado = null },
+                    onEliminar    = {
+                        coroutineScope.launch {
+                            db.puntosPersonalesDao().delete(personal)
+                            puntosPersonales          = db.puntosPersonalesDao().getAll()
+                            puntoPersonalSeleccionado = null
+                            Toast.makeText(context, "${personal.nombre} eliminado", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                )
+            }
+        }
+
+        // ── Card nuevo punto personal ────────────────────────────────────────
+        AnimatedVisibility(
+            visible  = puntoPersonalNuevo != null,
+            enter    = slideInVertically { -it / 2 } + fadeIn(tween(200)),
+            exit     = slideOutVertically { -it / 2 } + fadeOut(tween(150)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = topPadding, start = 14.dp, end = 14.dp)
+        ) {
+            puntoPersonalNuevo?.let { posicion ->
+                PuntoPersonalCard(
+                    posicion  = posicion,
+                    onDismiss = { puntoPersonalNuevo = null },
+                    onGuardar = { nombre, descripcion, isHome ->
+                        coroutineScope.launch {
+                            if (isHome) {
+                                db.puntosPersonalesDao().setAsHome(
+                                    PuntoPersonal(
+                                        nombre      = nombre,
+                                        descripcion = descripcion,
+                                        latitud     = posicion.longitude.toString(),
+                                        longitud    = posicion.latitude.toString(),
+                                        isHome      = true
+                                    )
+                                )
+                            } else {
+                                db.puntosPersonalesDao().insert(
+                                    PuntoPersonal(
+                                        nombre      = nombre,
+                                        descripcion = descripcion,
+                                        latitud     = posicion.longitude.toString(),
+                                        longitud    = posicion.latitude.toString()
+                                    )
+                                )
+                            }
+                            puntosPersonales = db.puntosPersonalesDao().getAll()
+                            Toast.makeText(context, "$nombre guardado", Toast.LENGTH_SHORT).show()
+                            puntoPersonalNuevo = null
+                        }
+                    }
+                )
+            }
+        }
+
+        // ── Menú radial ──────────────────────────────────────────────────────
+        Box(
+            modifier         = Modifier
+                .fillMaxSize()
+                .padding(bottom = 24.dp, end = 20.dp),
+            contentAlignment = Alignment.BottomEnd
+        ) {
+            RadialMenuButton(
+                items = listOf(
+                    RadialMenuItem(0, Icons.Default.Place,      "Puntos",      Color(0xFF212121)),
+                    RadialMenuItem(1, Icons.Default.Person,     "Personales",  Color(0xFF424242)),
+                    RadialMenuItem(2, Icons.Default.Star,       "Favoritos",   Color(0xFF616161)),
+                    RadialMenuItem(3, Icons.Default.Directions, "Calc. rutas", Color(0xFF757575)),
+                    RadialMenuItem(4, Icons.Default.Download,   "Esenciales",  Color(0xFF9E9E9E)),
+                    RadialMenuItem(5, Icons.Default.Layers,     "Ver rutas",
+                        if (mostrarRutasGuardadas) Color(0xFF1565C0) else Color(0xFFBDBDBD))
+                ),
+                onItemSelected = { item ->
+                    when (item.id) {
+                        0 -> onVerPuntos()
+                        1 -> onVerBarrios()
+                        2 -> onVerFavoritos()
+                        3 -> coroutineScope.launch { calcularYGuardarRutas() }
+                        4 -> coroutineScope.launch { cargarPuntosEsencialesComoFavoritos() }
+                        5 -> coroutineScope.launch { toggleRutasGuardadas() }
+                    }
+                }
+            )
+        }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Card: punto personal existente — minimalista
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun PuntoPersonalInfoCard(
     puntoPersonal: PuntoPersonal,
@@ -502,72 +579,110 @@ private fun PuntoPersonalInfoCard(
     onEliminar:    () -> Unit,
     modifier:      Modifier = Modifier
 ) {
-    val colorIndicador = if (puntoPersonal.isHome)
-        Color(COLOR_PUNTO_HOME.toColorInt())
-    else
-        Color(COLOR_PUNTO_PERSONAL.toColorInt())
+    val isHome    = puntoPersonal.isHome
+    val chipColor = if (isHome) Color(COLOR_PUNTO_HOME.toColorInt()) else ColorTextTertiary
 
-    Card(
-        modifier  = modifier.fillMaxWidth(),
-        shape     = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        colors    = CardDefaults.cardColors(containerColor = Color.White)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    Box(modifier = modifier.fillMaxWidth().cardWithBorder().padding(20.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+
+            // Encabezado
             Row(
                 modifier              = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment     = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(modifier = Modifier.size(14.dp).background(colorIndicador, CircleShape))
-                    Text(
-                        text       = if (puntoPersonal.isHome) "Mi hogar" else "Punto personal",
-                        fontSize   = 12.sp,
-                        color      = colorIndicador,
-                        fontWeight = FontWeight.SemiBold
+                TypeChip(
+                    label    = if (isHome) "Hogar" else "Personal",
+                    dotColor = chipColor
+                )
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Cerrar",
+                        tint               = ColorTextTertiary,
+                        modifier           = Modifier.size(16.dp)
                     )
-                }
-                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
+            // Nombre
             Row(
                 verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (puntoPersonal.isHome) {
-                    Icon(imageVector = Icons.Default.Home, contentDescription = "Hogar", tint = colorIndicador, modifier = Modifier.size(20.dp))
+                if (isHome) {
+                    Icon(
+                        Icons.Default.Home,
+                        contentDescription = null,
+                        tint               = Color(COLOR_PUNTO_HOME.toColorInt()),
+                        modifier           = Modifier.size(16.dp)
+                    )
                 }
-                Text(text = puntoPersonal.nombre, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                Text(
+                    text       = puntoPersonal.nombre,
+                    fontSize   = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color      = ColorTextPrimary,
+                    letterSpacing = (-0.3).sp
+                )
             }
 
             if (puntoPersonal.descripcion.isNotBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(text = puntoPersonal.descripcion, fontSize = 14.sp, color = Color.DarkGray)
+                Text(
+                    text      = puntoPersonal.descripcion,
+                    fontSize  = 13.sp,
+                    color     = ColorTextSecondary,
+                    lineHeight = 18.sp
+                )
             }
 
+            Spacer(modifier = Modifier.height(16.dp))
+            ThinDivider()
             Spacer(modifier = Modifier.height(12.dp))
 
-            OutlinedButton(
-                onClick  = onEliminar,
-                modifier = Modifier.fillMaxWidth(),
-                colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB71C1C))
+            // Acción destructiva
+            Row(
+                modifier  = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0x08D32F2F))
+                    .border(1.dp, Color(0x22D32F2F), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Eliminar punto")
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = null,
+                    tint               = ColorDestructive,
+                    modifier           = Modifier.size(15.dp)
+                )
+                Text(
+                    text       = "Eliminar punto",
+                    fontSize   = 13.sp,
+                    color      = ColorDestructive,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(onClick = onEliminar, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint               = ColorDestructive,
+                        modifier           = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Card: nuevo punto personal — minimalista
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun PuntoPersonalCard(
     posicion:  Position,
@@ -579,32 +694,46 @@ private fun PuntoPersonalCard(
     var descripcion by remember { mutableStateOf("") }
     var isHome      by remember { mutableStateOf(false) }
 
-    Card(
-        modifier  = modifier.fillMaxWidth(),
-        shape     = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        colors    = CardDefaults.cardColors(containerColor = Color.White)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor   = ColorBorderStrong,
+        unfocusedBorderColor = ColorBorder,
+        focusedLabelColor    = ColorTextPrimary,
+        unfocusedLabelColor  = ColorTextSecondary,
+        focusedTextColor     = ColorTextPrimary,
+        unfocusedTextColor   = ColorTextPrimary,
+        cursorColor          = ColorTextPrimary
+    )
+
+    Box(modifier = modifier.fillMaxWidth().cardWithBorder().padding(20.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+
+            // Encabezado
             Row(
                 modifier              = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment     = Alignment.CenterVertically
             ) {
-                Text(text = "Nuevo punto personal", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
+                TypeChip(label = "Nuevo punto", dotColor = ColorTextTertiary)
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Cerrar",
+                        tint               = ColorTextTertiary,
+                        modifier           = Modifier.size(16.dp)
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             OutlinedTextField(
                 value         = nombre,
                 onValueChange = { nombre = it },
-                label         = { Text("Nombre") },
+                label         = { Text("Nombre", fontSize = 13.sp) },
                 modifier      = Modifier.fillMaxWidth(),
-                singleLine    = true
+                singleLine    = true,
+                shape         = RoundedCornerShape(10.dp),
+                colors        = fieldColors
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -612,33 +741,95 @@ private fun PuntoPersonalCard(
             OutlinedTextField(
                 value         = descripcion,
                 onValueChange = { descripcion = it },
-                label         = { Text("Descripción") },
+                label         = { Text("Descripción", fontSize = 13.sp) },
                 modifier      = Modifier.fillMaxWidth(),
-                minLines      = 2
+                minLines      = 2,
+                shape         = RoundedCornerShape(10.dp),
+                colors        = fieldColors
             )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Checkbox(checked = isHome, onCheckedChange = { isHome = it })
-                Text(text = "Marcar como hogar", fontSize = 14.sp, color = Color.DarkGray)
-            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Toggle hogar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (isHome) Color(COLOR_PUNTO_HOME.toColorInt()).copy(alpha = 0.06f)
+                        else Color(0x05000000),
+                        RoundedCornerShape(10.dp)
+                    )
+                    .border(
+                        1.dp,
+                        if (isHome) Color(COLOR_PUNTO_HOME.toColorInt()).copy(alpha = 0.25f)
+                        else ColorBorder,
+                        RoundedCornerShape(10.dp)
+                    )
+                    .padding(horizontal = 14.dp, vertical = 4.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Home,
+                        contentDescription = null,
+                        tint = if (isHome) Color(COLOR_PUNTO_HOME.toColorInt()) else ColorTextSecondary,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text       = "Marcar como hogar",
+                        fontSize   = 13.sp,
+                        color      = if (isHome) Color(COLOR_PUNTO_HOME.toColorInt()) else ColorTextSecondary,
+                        fontWeight = if (isHome) FontWeight.Medium else FontWeight.Normal
+                    )
+                }
+                Switch(
+                    checked         = isHome,
+                    onCheckedChange = { isHome = it },
+                    colors          = SwitchDefaults.colors(
+                        checkedThumbColor   = Color.White,
+                        checkedTrackColor   = Color(COLOR_PUNTO_HOME.toColorInt()),
+                        uncheckedThumbColor = ColorTextTertiary,
+                        uncheckedTrackColor = ColorBorder
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            ThinDivider()
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Botón guardar
             Button(
                 onClick  = { if (nombre.isNotBlank()) onGuardar(nombre, descripcion, isHome) },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().height(44.dp),
+                shape    = RoundedCornerShape(10.dp),
+                colors   = ButtonDefaults.buttonColors(
+                    containerColor = ColorSurfaceDark,
+                    contentColor   = Color.White,
+                    disabledContainerColor = ColorBorder,
+                    disabledContentColor   = ColorTextTertiary
+                ),
+                enabled  = nombre.isNotBlank()
             ) {
-                Text("Guardar")
+                Text(
+                    text       = "Guardar punto",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize   = 13.sp,
+                    letterSpacing = 0.3.sp
+                )
             }
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Card: punto remoto / favorito — minimalista
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun PuntoInfoCard(
     punto:           Punto,
@@ -649,7 +840,7 @@ private fun PuntoInfoCard(
     onFavoritar:     () -> Unit,
     modifier:        Modifier = Modifier
 ) {
-    var isLoading by remember { mutableStateOf(false) }
+    var isLoading      by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val context        = LocalContext.current
 
@@ -668,19 +859,12 @@ private fun PuntoInfoCard(
         return null
     }
 
-    val colorTipo = try {
-        Color(punto.tipo.color.toColorInt())
-    } catch (e: Exception) {
-        Color.Gray
-    }
+    val colorTipo = try { Color(punto.tipo.color.toColorInt()) } catch (e: Exception) { Color.Gray }
 
-    Card(
-        modifier  = modifier.fillMaxWidth(),
-        shape     = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        colors    = CardDefaults.cardColors(containerColor = Color.White)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    Box(modifier = modifier.fillMaxWidth().cardWithBorder().padding(20.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+
+            // Encabezado: tipo + cierre
             Row(
                 modifier              = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -688,72 +872,135 @@ private fun PuntoInfoCard(
             ) {
                 Row(
                     verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Box(modifier = Modifier.size(14.dp).background(colorTipo, CircleShape))
-                    Text(text = punto.tipo.nombre, fontSize = 12.sp, color = colorTipo, fontWeight = FontWeight.SemiBold)
+                    TypeChip(label = punto.tipo.nombre, dotColor = colorTipo)
                     if (modoOffline) {
-                        Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFFFF9C4)) {
-                            Text(
-                                text     = "★ Favorito",
-                                fontSize = 10.sp,
-                                color    = Color(0xFFF57F17),
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0x0FFFCA28), RoundedCornerShape(6.dp))
+                                .border(1.dp, Color(0x33FFCA28), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                        ) {
+                            Text("guardado", fontSize = 9.sp, color = Color(0xFFBCA002), letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Cerrar",
+                        tint               = ColorTextTertiary,
+                        modifier           = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Nombre y descripción
+            Text(
+                text          = punto.nombre,
+                fontSize      = 18.sp,
+                fontWeight    = FontWeight.SemiBold,
+                color         = ColorTextPrimary,
+                letterSpacing = (-0.3).sp
+            )
+            if (punto.descripcion.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text       = punto.descripcion,
+                    fontSize   = 13.sp,
+                    color      = ColorTextSecondary,
+                    lineHeight = 18.sp
+                )
+            }
+
+            // Acciones (solo si no es offline)
+            if (!modoOffline) {
+                Spacer(modifier = Modifier.height(16.dp))
+                ThinDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Row(
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (!modoOffline) {
-                        Button(onClick = {
+                    // Botón Ruta
+                    OutlinedButton(
+                        onClick = {
                             coroutineScope.launch {
                                 val poly = getPolyline(punto.longitud, punto.latitud)
                                 if (poly != null) onRutaCalculada(poly)
                                 else Toast.makeText(context, "No se pudo obtener la ruta", Toast.LENGTH_SHORT).show()
                             }
-                        }) { Text("Ruta") }
-                        Button(onClick = onFavoritar) { Text("Favoritar") }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
+                        shape    = RoundedCornerShape(10.dp),
+                        border   = androidx.compose.foundation.BorderStroke(1.dp, ColorBorderStrong),
+                        colors   = ButtonDefaults.outlinedButtonColors(
+                            contentColor = ColorTextPrimary
+                        )
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier  = Modifier.size(14.dp),
+                                color     = ColorTextPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Directions, null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Ruta", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        }
                     }
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
+
+                    // Botón Favoritar
+                    Button(
+                        onClick  = onFavoritar,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
+                        shape  = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ColorSurfaceDark,
+                            contentColor   = Color.White
+                        )
+                    ) {
+                        Icon(Icons.Default.Star, null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text("Guardar", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(text = punto.nombre,      fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(text = punto.descripcion, fontSize = 14.sp, color = Color.DarkGray)
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Layers (sin cambios)
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun CircleLayerPlacitas(
     puntos:       List<Punto>,
     onPuntoClick: (Punto) -> Unit
 ) {
     if (puntos.isEmpty()) return
-
     val dotSource = rememberGeoJsonSource(
         data = GeoJsonData.Features(
-            FeatureCollection(
-                puntos.map { punto ->
-                    Feature(
-                        geometry   = Point(Position(punto.latitud.toDouble(), punto.longitud.toDouble())),
-                        properties = JsonObject(mapOf(
-                            "color" to JsonPrimitive(punto.tipo.color),
-                            "id"    to JsonPrimitive(punto.id)
-                        ))
-                    )
-                }
-            )
+            FeatureCollection(puntos.map { punto ->
+                Feature(
+                    geometry   = Point(Position(punto.latitud.toDouble(), punto.longitud.toDouble())),
+                    properties = JsonObject(mapOf(
+                        "color" to JsonPrimitive(punto.tipo.color),
+                        "id"    to JsonPrimitive(punto.id)
+                    ))
+                )
+            })
         )
     )
-
     CircleLayer(
         id          = "circle-layer-placitas",
         source      = dotSource,
@@ -776,24 +1023,20 @@ private fun CircleLayerPersonales(
     onPuntoClick:     (PuntoPersonal) -> Unit
 ) {
     if (puntosPersonales.isEmpty()) return
-
     val dotSource = rememberGeoJsonSource(
         data = GeoJsonData.Features(
-            FeatureCollection(
-                puntosPersonales.map { punto ->
-                    Feature(
-                        geometry   = Point(Position(punto.latitud.toDouble(), punto.longitud.toDouble())),
-                        properties = JsonObject(mapOf(
-                            "id"     to JsonPrimitive(punto.id),
-                            "color"  to JsonPrimitive(if (punto.isHome) COLOR_PUNTO_HOME else COLOR_PUNTO_PERSONAL),
-                            "isHome" to JsonPrimitive(punto.isHome)
-                        ))
-                    )
-                }
-            )
+            FeatureCollection(puntosPersonales.map { punto ->
+                Feature(
+                    geometry   = Point(Position(punto.latitud.toDouble(), punto.longitud.toDouble())),
+                    properties = JsonObject(mapOf(
+                        "id"     to JsonPrimitive(punto.id),
+                        "color"  to JsonPrimitive(if (punto.isHome) COLOR_PUNTO_HOME else COLOR_PUNTO_PERSONAL),
+                        "isHome" to JsonPrimitive(punto.isHome)
+                    ))
+                )
+            })
         )
     )
-
     CircleLayer(
         id          = "circle-layer-personales",
         source      = dotSource,
