@@ -277,8 +277,13 @@ fun MapaScreen(
                         latitude  = location.position.latitude,
                         longitude = location.position.longitude
                     )
-                    LaunchedEffect(coords) {
-                        cameraState.animateTo(CameraPosition(target = coords, zoom = 15.0))
+                    // Solo centra la primera vez que se obtiene la ubicación
+                    var centradoInicial by remember { mutableStateOf(false) }
+                    LaunchedEffect(centradoInicial) {
+                        if (!centradoInicial) {
+                            cameraState.animateTo(CameraPosition(target = coords, zoom = 15.0))
+                            centradoInicial = true
+                        }
                     }
                     LocationPuck(
                         idPrefix      = "user-location",
