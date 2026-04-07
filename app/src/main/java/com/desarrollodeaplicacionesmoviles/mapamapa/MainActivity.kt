@@ -69,8 +69,8 @@ class MainActivity : ComponentActivity() {
                 composable("mapa") {
                     Column(modifier = Modifier.padding(bottom = 0.dp, top = 0.dp)) {
                         MapaScreen(
-                            onVerPuntos = { navController.navigate("puntos") },
-                            onVerBarrios = { navController.navigate("barrios") },
+                            onVerPuntos    = { navController.navigate("puntos") },
+                            onVerBarrios   = { navController.navigate("barrios") },
                             onVerFavoritos = { navController.navigate("favoritos") }
                         )
                     }
@@ -81,15 +81,16 @@ class MainActivity : ComponentActivity() {
                 composable("favoritos") {
                     FavoritosScreen(onBack = { navController.popBackStack() })
                 }
-                composable("barrios") {}
+                composable("barrios") {
+                    PersonalesScreen(onBack = { navController.popBackStack() })
+                }
             }
         }
     }
 }
 
-// ─── Colores para puntos personales ──────────────────────────────────────────
 private val COLOR_PUNTO_PERSONAL = "#424242"
-private val COLOR_PUNTO_HOME     = "#E65100"   // naranja intenso para distinguir el hogar
+private val COLOR_PUNTO_HOME     = "#E65100"
 
 @Composable
 fun MapaScreen(
@@ -101,35 +102,47 @@ fun MapaScreen(
     val db = remember { AppDatabase.getInstance(context) }
     val coroutineScope = rememberCoroutineScope()
 
-    // Estado de conexión: null = todavía cargando, true = online, false = offline
+    // ── Permiso: se verifica antes de llamar a rememberDefaultLocationProvider ──
+    var permisoOtorgado by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        permisoOtorgado = granted
+    }
+
+    LaunchedEffect(Unit) {
+        if (!permisoOtorgado) {
+            launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+
     var modoOffline by remember { mutableStateOf(false) }
-
-    // Puntos remotos (o favoritos como fallback)
     var puntos by remember { mutableStateOf<List<Punto>>(emptyList()) }
-
-    // Puntos personales locales
     var puntosPersonales by remember { mutableStateOf<List<PuntoPersonal>>(emptyList()) }
-
-    // Selección activa — solo una puede ser no-null a la vez
     var puntoSeleccionado by remember { mutableStateOf<Punto?>(null) }
     var puntoPersonalSeleccionado by remember { mutableStateOf<PuntoPersonal?>(null) }
     var puntoPersonalNuevo by remember { mutableStateOf<Position?>(null) }
-
     var ruta by remember { mutableStateOf<String?>(null) }
+    var rutasGuardadas by remember { mutableStateOf<List<String>>(emptyList()) }
+    var mostrarRutasGuardadas by remember { mutableStateOf(false) }
 
-    // ── Carga de puntos: intenta remoto, cae a favoritos locales ────────────
     LaunchedEffect(Unit) {
         try {
-            val remotos = RetrofitClient.api.listarPuntos()
-            puntos = remotos
+            puntos = RetrofitClient.api.listarPuntos()
             modoOffline = false
         } catch (e: Exception) {
             e.printStackTrace()
             modoOffline = true
-            // Fallback: convierte los favoritos guardados en Punto para reutilizar el layer
             try {
                 val favoritos = db.favoritosDao().getAll()
-// ✅ DESPUÉS
                 puntos = favoritos.map { fav ->
                     Punto(
                         id          = fav.id,
@@ -137,7 +150,7 @@ fun MapaScreen(
                         descripcion = fav.descripcion,
                         latitud     = fav.latitud,
                         longitud    = fav.longitud,
-                        tipo_id     = 0, // no se usa localmente, valor placeholder
+                        tipo_id     = 0,
                         tipo        = Tipo(id = 0, nombre = fav.tipo_nombre, color = fav.tipo_color)
                     )
                 }
@@ -147,7 +160,6 @@ fun MapaScreen(
         }
     }
 
-    // ── Carga de puntos personales ────────────────────────────────────────────
     LaunchedEffect(Unit) {
         try {
             puntosPersonales = db.puntosPersonalesDao().getAll()
@@ -156,66 +168,128 @@ fun MapaScreen(
         }
     }
 
-    val locationProvider = rememberDefaultLocationProvider()
-    val locationState = rememberUserLocationState(locationProvider)
+    // ── Location: solo se inicializa si el permiso fue otorgado ─────────────
+    val locationProvider = if (permisoOtorgado) rememberDefaultLocationProvider() else null
+    val locationState    = if (locationProvider != null) rememberUserLocationState(locationProvider) else null
+
     val cameraState = rememberCameraState(
         firstPosition = CameraPosition(
             target = Position(
-                locationState.location?.position?.longitude ?: -68.1193,
-                locationState.location?.position?.latitude ?: -16.5000
+                locationState?.location?.position?.longitude ?: -68.1193,
+                locationState?.location?.position?.latitude ?: -16.5000
             ),
             zoom = 15.0
         )
     )
 
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { }
+    suspend fun cargarPuntosEsencialesComoFavoritos() {
+        try {
+            val esenciales = RetrofitClient.api.listarPuntosEscenciales()
+            var guardados = 0
+            esenciales.forEach { punto ->
+                db.favoritosDao().insert(
+                    PuntoFavorito(
+                        id          = punto.id,
+                        nombre      = punto.nombre,
+                        descripcion = punto.descripcion,
+                        latitud     = punto.latitud,
+                        longitud    = punto.longitud,
+                        tipo_nombre = punto.tipo?.nombre ?: "Esencial",
+                        tipo_color  = punto.tipo?.color ?: "#9E9E9E"
+                    )
+                )
+                guardados++
+            }
+            Toast.makeText(context, "$guardados puntos esenciales guardados como favoritos", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Error: ${e.javaClass.simpleName} - ${e.message}", Toast.LENGTH_LONG).show()
+            e.printStackTrace()
+        }
+    }
 
-    LaunchedEffect(Unit) {
-        val hasPermission = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!hasPermission) launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    suspend fun calcularYGuardarRutas() {
+        val home = db.puntosPersonalesDao().getHome()
+        if (home == null) {
+            Toast.makeText(context, "No tienes un punto hogar definido", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val favoritos = db.favoritosDao().getAll()
+        if (favoritos.isEmpty()) {
+            Toast.makeText(context, "No tienes favoritos guardados", Toast.LENGTH_SHORT).show()
+            return
+        }
+        db.rutaDao().deleteAll()
+        var calculadas = 0
+        favoritos.forEach { favorito ->
+            try {
+                val polyline = RetrofitClient.api.obtenerPolylineSimple(
+                    home.longitud,
+                    home.latitud,
+                    favorito.longitud,
+                    favorito.latitud
+                )
+                if (polyline != null) {
+                    db.rutaDao().insert(Ruta(polyline = polyline))
+                    calculadas++
+                }
+            } catch (e: Exception) {
+                println("Error calculando ruta a ${favorito.nombre}: ${e.message}")
+            }
+        }
+        Toast.makeText(context, "$calculadas rutas calculadas y guardadas", Toast.LENGTH_SHORT).show()
+    }
+
+    suspend fun toggleRutasGuardadas() {
+        if (mostrarRutasGuardadas) {
+            mostrarRutasGuardadas = false
+            rutasGuardadas = emptyList()
+        } else {
+            val rutas = db.rutaDao().getAll()
+            if (rutas.isEmpty()) {
+                Toast.makeText(context, "No hay rutas guardadas", Toast.LENGTH_SHORT).show()
+                return
+            }
+            rutasGuardadas = rutas.map { it.polyline }
+            mostrarRutasGuardadas = true
+            Toast.makeText(context, "${rutas.size} rutas cargadas", Toast.LENGTH_SHORT).show()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
         MaplibreMap(
-            baseStyle = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
+            baseStyle   = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
             cameraState = cameraState,
-            onMapClick = { position, _ ->
-                // Toque en mapa vacío: abrir card para nuevo punto personal
-                // (solo si no hay ninguna card abierta)
+            onMapClick  = { position, _ ->
                 if (puntoSeleccionado == null && puntoPersonalSeleccionado == null) {
                     puntoPersonalNuevo = position
                 } else {
-                    puntoSeleccionado = null
+                    puntoSeleccionado         = null
                     puntoPersonalSeleccionado = null
-                    ruta = null
+                    ruta                      = null
                 }
                 ClickResult.Pass
             }
         ) {
-            locationState.location?.let { location ->
-                val coords = Position(
-                    latitude  = location.position.latitude,
-                    longitude = location.position.longitude
-                )
-                LaunchedEffect(coords) {
-                    cameraState.animateTo(CameraPosition(target = coords, zoom = 15.0))
+            if (permisoOtorgado && locationState != null) {
+                locationState.location?.let { location ->
+                    val coords = Position(
+                        latitude  = location.position.latitude,
+                        longitude = location.position.longitude
+                    )
+                    LaunchedEffect(coords) {
+                        cameraState.animateTo(CameraPosition(target = coords, zoom = 15.0))
+                    }
+                    LocationPuck(
+                        idPrefix      = "user-location",
+                        locationState = locationState,
+                        cameraState   = cameraState
+                    )
                 }
-                LocationPuck(
-                    idPrefix      = "user-location",
-                    locationState = locationState,
-                    cameraState   = cameraState
-                )
             }
 
-            // Layer de puntos remotos (o favoritos en offline)
             CircleLayerPlacitas(
-                puntos = puntos,
+                puntos       = puntos,
                 onPuntoClick = { punto ->
                     puntoPersonalNuevo        = null
                     puntoPersonalSeleccionado = null
@@ -223,18 +297,16 @@ fun MapaScreen(
                 }
             )
 
-            // Layer de puntos personales (home en naranja, resto en gris oscuro)
             CircleLayerPersonales(
                 puntosPersonales = puntosPersonales,
-                onPuntoClick = { personal ->
-                    puntoPersonalNuevo = null
-                    puntoSeleccionado  = null
-                    ruta               = null
+                onPuntoClick     = { personal ->
+                    puntoPersonalNuevo        = null
+                    puntoSeleccionado         = null
+                    ruta                      = null
                     puntoPersonalSeleccionado = personal
                 }
             )
 
-            // Ruta calculada
             ruta?.let { encodedPolyline ->
                 val posiciones = remember(encodedPolyline) { decodificarPolyline(encodedPolyline) }
                 if (posiciones.size >= 2) {
@@ -258,47 +330,60 @@ fun MapaScreen(
                     )
                 }
             }
-        }
 
-        // ── Banner de modo offline ───────────────────────────────────────────
-        if (modoOffline) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 8.dp),
-                shape  = RoundedCornerShape(20.dp),
-                color  = Color(0xFFB71C1C).copy(alpha = 0.9f),
-                tonalElevation = 4.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector        = Icons.Default.Warning,
-                        contentDescription = null,
-                        tint               = Color.White,
-                        modifier           = Modifier.size(16.dp)
+            if (mostrarRutasGuardadas && rutasGuardadas.isNotEmpty()) {
+                val todasLasPosiciones = rutasGuardadas
+                    .map { decodificarPolyline(it) }
+                    .filter { it.size >= 2 }
+                if (todasLasPosiciones.isNotEmpty()) {
+                    val rutasSource = rememberGeoJsonSource(
+                        data = GeoJsonData.Features(
+                            FeatureCollection(
+                                todasLasPosiciones.mapIndexed { index, posiciones ->
+                                    Feature(
+                                        geometry   = LineString(posiciones),
+                                        properties = JsonObject(mapOf("index" to JsonPrimitive(index)))
+                                    )
+                                }
+                            )
+                        )
                     )
-                    Text(
-                        text      = "Sin conexión — mostrando favoritos guardados",
-                        color     = Color.White,
-                        fontSize  = 12.sp,
-                        fontWeight = FontWeight.Medium
+                    LineLayer(
+                        id     = "rutas-guardadas-layer",
+                        source = rutasSource,
+                        color  = const(Color(0xFFE65100)),
+                        width  = const(4.dp)
                     )
                 }
             }
         }
 
-        // ── Card de punto remoto / favorito ─────────────────────────────────
+        if (modoOffline) {
+            Surface(
+                modifier       = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+                shape          = RoundedCornerShape(20.dp),
+                color          = Color(0xFFB71C1C).copy(alpha = 0.9f),
+                tonalElevation = 4.dp
+            ) {
+                Row(
+                    modifier              = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Text(text = "Sin conexión — mostrando favoritos guardados", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+
         puntoSeleccionado?.let { punto ->
             PuntoInfoCard(
-                punto          = punto,
-                modoOffline    = modoOffline,
-                onDismiss      = { puntoSeleccionado = null; ruta = null },
+                punto           = punto,
+                modoOffline     = modoOffline,
+                locationState   = locationState,
+                onDismiss       = { puntoSeleccionado = null; ruta = null },
                 onRutaCalculada = { poly -> ruta = poly },
-                onFavoritar    = {
+                onFavoritar     = {
                     coroutineScope.launch {
                         db.favoritosDao().insert(
                             PuntoFavorito(
@@ -320,7 +405,6 @@ fun MapaScreen(
             )
         }
 
-        // ── Card de punto personal existente ────────────────────────────────
         puntoPersonalSeleccionado?.let { personal ->
             PuntoPersonalInfoCard(
                 puntoPersonal = personal,
@@ -339,7 +423,6 @@ fun MapaScreen(
             )
         }
 
-        // ── Card para crear nuevo punto personal ────────────────────────────
         puntoPersonalNuevo?.let { posicion ->
             PuntoPersonalCard(
                 posicion  = posicion,
@@ -351,8 +434,8 @@ fun MapaScreen(
                                 PuntoPersonal(
                                     nombre      = nombre,
                                     descripcion = descripcion,
-                                    latitud     = posicion.latitude.toString(),
-                                    longitud    = posicion.longitude.toString(),
+                                    latitud     = posicion.longitude.toString(),
+                                    longitud    = posicion.latitude.toString(),
                                     isHome      = true
                                 )
                             )
@@ -361,8 +444,8 @@ fun MapaScreen(
                                 PuntoPersonal(
                                     nombre      = nombre,
                                     descripcion = descripcion,
-                                    latitud     = posicion.latitude.toString(),
-                                    longitud    = posicion.longitude.toString()
+                                    latitud     = posicion.longitude.toString(),
+                                    longitud    = posicion.latitude.toString()
                                 )
                             )
                         }
@@ -377,23 +460,28 @@ fun MapaScreen(
             )
         }
 
-        // ── Menú radial ──────────────────────────────────────────────────────
         Box(
-            modifier        = Modifier.fillMaxSize().padding(4.dp),
+            modifier         = Modifier.fillMaxSize().padding(4.dp),
             contentAlignment = Alignment.BottomEnd
         ) {
             Box(modifier = Modifier.offset(x = 8.dp, y = 18.dp)) {
                 RadialMenuButton(
                     items = listOf(
-                        RadialMenuItem(0, Icons.Default.LocationOn, "Puntos",    Color.Cyan),
-                        RadialMenuItem(1, Icons.Default.Call,       "Barrios",   Color.Green),
-                        RadialMenuItem(2, Icons.Default.Star,       "Favoritos", Color.Yellow)
+                        RadialMenuItem(0, Icons.Default.LocationOn, "Puntos",     Color.Cyan),
+                        RadialMenuItem(1, Icons.Default.Call,       "Personales",    Color.Green),
+                        RadialMenuItem(2, Icons.Default.Star,       "Favoritos",  Color.Yellow),
+                        RadialMenuItem(3, Icons.Default.Clear,      "Rutas",      Color.Magenta),
+                        RadialMenuItem(4, Icons.Default.Refresh,    "Cargar fav", Color.White),
+                        RadialMenuItem(5, Icons.Default.List,       "Ver rutas",  if (mostrarRutasGuardadas) Color.Red else Color.LightGray)
                     ),
                     onItemSelected = { item ->
                         when (item.id) {
                             0 -> onVerPuntos()
                             1 -> onVerBarrios()
                             2 -> onVerFavoritos()
+                            3 -> coroutineScope.launch { calcularYGuardarRutas() }
+                            4 -> coroutineScope.launch { cargarPuntosEsencialesComoFavoritos() }
+                            5 -> coroutineScope.launch { toggleRutasGuardadas() }
                         }
                     }
                 )
@@ -402,9 +490,6 @@ fun MapaScreen(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Card informativa de un punto personal EXISTENTE
-// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun PuntoPersonalInfoCard(
     puntoPersonal: PuntoPersonal,
@@ -424,8 +509,6 @@ private fun PuntoPersonalInfoCard(
         colors    = CardDefaults.cardColors(containerColor = Color.White)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-
-            // Encabezado con tipo y botón cerrar
             Row(
                 modifier              = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -435,11 +518,7 @@ private fun PuntoPersonalInfoCard(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(14.dp)
-                            .background(colorIndicador, CircleShape)
-                    )
+                    Box(modifier = Modifier.size(14.dp).background(colorIndicador, CircleShape))
                     Text(
                         text       = if (puntoPersonal.isHome) "Mi hogar" else "Punto personal",
                         fontSize   = 12.sp,
@@ -454,49 +533,29 @@ private fun PuntoPersonalInfoCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Nombre con ícono de hogar si aplica
             Row(
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (puntoPersonal.isHome) {
-                    Icon(
-                        imageVector        = Icons.Default.Home,
-                        contentDescription = "Hogar",
-                        tint               = colorIndicador,
-                        modifier           = Modifier.size(20.dp)
-                    )
+                    Icon(imageVector = Icons.Default.Home, contentDescription = "Hogar", tint = colorIndicador, modifier = Modifier.size(20.dp))
                 }
-                Text(
-                    text       = puntoPersonal.nombre,
-                    fontSize   = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color      = Color.Black
-                )
+                Text(text = puntoPersonal.nombre, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
             }
 
             if (puntoPersonal.descripcion.isNotBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text     = puntoPersonal.descripcion,
-                    fontSize = 14.sp,
-                    color    = Color.DarkGray
-                )
+                Text(text = puntoPersonal.descripcion, fontSize = 14.sp, color = Color.DarkGray)
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Botón eliminar
             OutlinedButton(
-                onClick = onEliminar,
+                onClick  = onEliminar,
                 modifier = Modifier.fillMaxWidth(),
                 colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB71C1C))
             ) {
-                Icon(
-                    imageVector        = Icons.Default.Delete,
-                    contentDescription = null,
-                    modifier           = Modifier.size(16.dp)
-                )
+                Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Eliminar punto")
             }
@@ -504,9 +563,6 @@ private fun PuntoPersonalInfoCard(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Card para CREAR un nuevo punto personal (toque en mapa vacío)
-// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun PuntoPersonalCard(
     posicion:  Position,
@@ -530,12 +586,7 @@ private fun PuntoPersonalCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment     = Alignment.CenterVertically
             ) {
-                Text(
-                    text       = "Nuevo punto personal",
-                    fontSize   = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color      = Color.Black
-                )
+                Text(text = "Nuevo punto personal", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                 IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
                     Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
                 }
@@ -583,21 +634,16 @@ private fun PuntoPersonalCard(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Card informativa de un punto remoto / favorito
-// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun PuntoInfoCard(
     punto:           Punto,
     modoOffline:     Boolean = false,
+    locationState:   org.maplibre.compose.location.UserLocationState?,
     onDismiss:       () -> Unit,
     onRutaCalculada: (String) -> Unit,
     onFavoritar:     () -> Unit,
     modifier:        Modifier = Modifier
 ) {
-    val locationProvider = rememberDefaultLocationProvider()
-    val locationState    = rememberUserLocationState(locationProvider)
-
     var isLoading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val context        = LocalContext.current
@@ -606,8 +652,8 @@ private fun PuntoInfoCard(
         if (isLoading) return null
         isLoading = true
         try {
-            val userLat = locationState.location?.position?.latitude.toString()
-            val userLng = locationState.location?.position?.longitude.toString()
+            val userLat = locationState?.location?.position?.latitude.toString()
+            val userLng = locationState?.location?.position?.longitude.toString()
             return RetrofitClient.api.obtenerPolylineSimple(userLat, userLng, lat, long)
         } catch (e: Exception) {
             Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
@@ -639,23 +685,10 @@ private fun PuntoInfoCard(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(14.dp)
-                            .background(colorTipo, CircleShape)
-                    )
-                    Text(
-                        text       = punto.tipo.nombre,
-                        fontSize   = 12.sp,
-                        color      = colorTipo,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    // Badge si es favorito guardado (modo offline)
+                    Box(modifier = Modifier.size(14.dp).background(colorTipo, CircleShape))
+                    Text(text = punto.tipo.nombre, fontSize = 12.sp, color = colorTipo, fontWeight = FontWeight.SemiBold)
                     if (modoOffline) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFFFFF9C4)
-                        ) {
+                        Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFFFF9C4)) {
                             Text(
                                 text     = "★ Favorito",
                                 fontSize = 10.sp,
@@ -669,7 +702,6 @@ private fun PuntoInfoCard(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Ruta solo disponible con conexión
                     if (!modoOffline) {
                         Button(onClick = {
                             coroutineScope.launch {
@@ -678,10 +710,8 @@ private fun PuntoInfoCard(
                                 else Toast.makeText(context, "No se pudo obtener la ruta", Toast.LENGTH_SHORT).show()
                             }
                         }) { Text("Ruta") }
-
                         Button(onClick = onFavoritar) { Text("Favoritar") }
                     }
-
                     IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.Gray)
                     }
@@ -689,16 +719,13 @@ private fun PuntoInfoCard(
             }
 
             Spacer(modifier = Modifier.height(6.dp))
-            Text(text = punto.nombre,      fontSize = 18.sp, fontWeight = FontWeight.Bold,  color = Color.Black)
+            Text(text = punto.nombre,      fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
             Spacer(modifier = Modifier.height(4.dp))
             Text(text = punto.descripcion, fontSize = 14.sp, color = Color.DarkGray)
         }
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Layer: puntos remotos / favoritos
-// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun CircleLayerPlacitas(
     puntos:       List<Punto>,
@@ -711,15 +738,11 @@ private fun CircleLayerPlacitas(
             FeatureCollection(
                 puntos.map { punto ->
                     Feature(
-                        geometry   = Point(
-                            Position(punto.latitud.toDouble(), punto.longitud.toDouble())
-                        ),
-                        properties = JsonObject(
-                            mapOf(
-                                "color" to JsonPrimitive(punto.tipo.color),
-                                "id"    to JsonPrimitive(punto.id)
-                            )
-                        )
+                        geometry   = Point(Position(punto.latitud.toDouble(), punto.longitud.toDouble())),
+                        properties = JsonObject(mapOf(
+                            "color" to JsonPrimitive(punto.tipo.color),
+                            "id"    to JsonPrimitive(punto.id)
+                        ))
                     )
                 }
             )
@@ -735,19 +758,13 @@ private fun CircleLayerPlacitas(
         strokeWidth = const(2.dp),
         minZoom     = 10f,
         onClick     = { features ->
-            val clickedId = features.firstOrNull()
-                ?.properties?.get("id")?.toString()?.toIntOrNull()
-            if (clickedId != null) {
-                puntos.find { it.id == clickedId }?.let { onPuntoClick(it) }
-            }
+            val clickedId = features.firstOrNull()?.properties?.get("id")?.toString()?.toIntOrNull()
+            if (clickedId != null) puntos.find { it.id == clickedId }?.let { onPuntoClick(it) }
             ClickResult.Consume
         }
     )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Layer: puntos personales (home = naranja, resto = gris oscuro)
-// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun CircleLayerPersonales(
     puntosPersonales: List<PuntoPersonal>,
@@ -760,19 +777,12 @@ private fun CircleLayerPersonales(
             FeatureCollection(
                 puntosPersonales.map { punto ->
                     Feature(
-                        geometry   = Point(
-                            Position(punto.longitud.toDouble(), punto.latitud.toDouble())
-                        ),
-                        properties = JsonObject(
-                            mapOf(
-                                "id"    to JsonPrimitive(punto.id),
-                                // Guardamos el color como propiedad para usarlo en el layer
-                                "color" to JsonPrimitive(
-                                    if (punto.isHome) COLOR_PUNTO_HOME else COLOR_PUNTO_PERSONAL
-                                ),
-                                "isHome" to JsonPrimitive(punto.isHome)
-                            )
-                        )
+                        geometry   = Point(Position(punto.latitud.toDouble(), punto.longitud.toDouble())),
+                        properties = JsonObject(mapOf(
+                            "id"     to JsonPrimitive(punto.id),
+                            "color"  to JsonPrimitive(if (punto.isHome) COLOR_PUNTO_HOME else COLOR_PUNTO_PERSONAL),
+                            "isHome" to JsonPrimitive(punto.isHome)
+                        ))
                     )
                 }
             )
@@ -782,18 +792,14 @@ private fun CircleLayerPersonales(
     CircleLayer(
         id          = "circle-layer-personales",
         source      = dotSource,
-        // Reutilizamos feature["color"] igual que en el layer de placitas
         color       = feature["color"].convertToColor(),
         radius      = const(7.dp),
         strokeColor = const(Color.White),
         strokeWidth = const(2.dp),
         minZoom     = 10f,
         onClick     = { features ->
-            val clickedId = features.firstOrNull()
-                ?.properties?.get("id")?.toString()?.toIntOrNull()
-            if (clickedId != null) {
-                puntosPersonales.find { it.id == clickedId }?.let { onPuntoClick(it) }
-            }
+            val clickedId = features.firstOrNull()?.properties?.get("id")?.toString()?.toIntOrNull()
+            if (clickedId != null) puntosPersonales.find { it.id == clickedId }?.let { onPuntoClick(it) }
             ClickResult.Consume
         }
     )

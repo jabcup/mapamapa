@@ -16,6 +16,9 @@ interface ApiService {
     @GET("puntos")
     suspend fun listarPuntos(): List<Punto>
 
+    @GET("puntos/escenciales")
+    suspend fun listarPuntosEscenciales(): List<Punto>
+
     @GET("puntos/{id}")
     suspend fun obtenerPunto(@Path("id") id: Int): Punto
 
